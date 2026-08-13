@@ -19,15 +19,24 @@ ARG DEBCONF_NOWARNINGS="yes"
 ARG DEBIAN_FRONTEND="noninteractive"
 ARG DEBCONF_NONINTERACTIVE_SEEN="true"
 
-COPY --chmod=755 ./web/conf/novnc.sh /run/novnc.sh
+# Copy the whole web directory.
+# Railway does not support RUN --mount=type=bind.
+COPY --chmod=755 ./web /var/www/
 
 RUN <<EOF
   set -eu
 
-  echo "deb https://deb.debian.org/debian trixie non-free" > /etc/apt/sources.list.d/non-free.list
+  # ------------------------------------------------------------
+  # Debian repositories
+  # ------------------------------------------------------------
+  echo "deb https://deb.debian.org/debian trixie non-free" \
+    > /etc/apt/sources.list.d/non-free.list
 
   apt-get update
 
+  # ------------------------------------------------------------
+  # Base packages
+  # ------------------------------------------------------------
   apt-get --no-install-recommends -y install \
     bc \
     jq \
@@ -63,6 +72,9 @@ RUN <<EOF
     netcat-openbsd \
     ca-certificates
 
+  # ------------------------------------------------------------
+  # Mesa Intel - amd64 only
+  # ------------------------------------------------------------
   if [ "$TARGETARCH" = "amd64" ]; then
     wget \
       "https://github.com/qemus/mesa-intel/releases/download/v${VERSION_MESA}/mesa-intel_${VERSION_MESA}_amd64.deb" \
@@ -70,9 +82,13 @@ RUN <<EOF
       -q \
       --timeout=10
 
-    apt-get --no-install-recommends -y install /tmp/mesa-intel.deb
+    apt-get --no-install-recommends -y install \
+      /tmp/mesa-intel.deb
   fi
 
+  # ------------------------------------------------------------
+  # QEMU / OVMF from Debian snapshot
+  # ------------------------------------------------------------
   echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ sid main" \
     > /etc/apt/sources.list.d/qemu-snapshot.list
 
@@ -89,12 +105,18 @@ RUN <<EOF
       "qemu-system-modules-opengl=${VERSION_QEMU}"
   fi
 
+  # ------------------------------------------------------------
+  # QEMU QMP
+  # ------------------------------------------------------------
   pip3 install \
     --no-cache-dir \
     --break-system-packages \
     --root-user-action=ignore \
     "qemu.qmp==${VERSION_QMP}"
 
+  # ------------------------------------------------------------
+  # Passt
+  # ------------------------------------------------------------
   wget \
     "https://github.com/qemus/passt/releases/download/v${VERSION_PASST}/passt_${VERSION_PASST}_${TARGETARCH}.deb" \
     -O /tmp/passt.deb \
@@ -103,6 +125,9 @@ RUN <<EOF
 
   dpkg -i /tmp/passt.deb
 
+  # ------------------------------------------------------------
+  # websocketd
+  # ------------------------------------------------------------
   wget \
     "https://github.com/qemus/websocketd/releases/download/v${VERSION_WSD}/websocketd-${VERSION_WSD}_${TARGETARCH}.deb" \
     -O /tmp/wsd.deb \
@@ -111,13 +136,64 @@ RUN <<EOF
 
   dpkg -i /tmp/wsd.deb
 
+  # ------------------------------------------------------------
+  # Install noVNC
+  # ------------------------------------------------------------
+  if [ -f /var/www/conf/novnc.sh ]; then
+    chmod +x /var/www/conf/novnc.sh
+    /var/www/conf/novnc.sh "$VERSION_VNC"
+  else
+    echo "ERROR: /var/www/conf/novnc.sh not found"
+    exit 1
+  fi
+
+  # ------------------------------------------------------------
+  # Optional noVNC configuration files
+  # ------------------------------------------------------------
+  if [ -f /var/www/conf/defaults.json ]; then
+    cp /var/www/conf/defaults.json /usr/share/novnc/defaults.json
+  fi
+
+  if [ -f /var/www/conf/mandatory.json ]; then
+    cp /var/www/conf/mandatory.json /usr/share/novnc/mandatory.json
+  fi
+
+  # ------------------------------------------------------------
+  # Nginx configuration
+  #
+  # Railway does not have the original nginx.conf from the
+  # repository, so create a minimal configuration here.
+  # ------------------------------------------------------------
+  rm -f /etc/nginx/sites-enabled/default
+  rm -f /etc/nginx/conf.d/default.conf
+
+  cat > /etc/nginx/conf.d/railway.conf <<'NGINX'
+server {
+    listen 8006;
+    listen [::]:8006;
+
+    server_name _;
+
+    root /var/www;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+NGINX
+
+  # ------------------------------------------------------------
+  # Version
+  # ------------------------------------------------------------
+  echo "$VERSION_ARG" > /etc/version
+
+  # ------------------------------------------------------------
+  # Cleanup
+  # ------------------------------------------------------------
   rm -f /etc/apt/sources.list.d/qemu-snapshot.list
 
   apt-get clean
-
-  sh /run/novnc.sh "$VERSION_VNC"
-
-  echo "$VERSION_ARG" > /etc/version
 
   rm -rf \
     /var/lib/apt/lists/* \
@@ -125,28 +201,22 @@ RUN <<EOF
     /var/tmp/*
 EOF
 
+# Application scripts
 COPY --chmod=755 ./src /run/
 
-COPY --chmod=755 --exclude=conf/novnc.sh ./web /var/www/
-
-COPY --chmod=664 \
-  ./web/conf/defaults.json \
-  /usr/share/novnc
-
-COPY --chmod=664 \
-  ./web/conf/mandatory.json \
-  /usr/share/novnc
-
-COPY --chmod=744 \
-  ./web/conf/nginx.conf \
-  /etc/nginx/default.conf
-
+# ------------------------------------------------------------
+# Boot logo
+# ------------------------------------------------------------
 RUN wget \
     "https://github.com/qemus/boot-logo/releases/download/v${VERSION_UTK}/boot-logo_${TARGETARCH}.bin" \
     -O /run/boot-logo \
     -q \
     --timeout=10 \
   && chmod 755 /run/boot-logo
+
+# Railway does not support Docker VOLUME.
+# Create the directory; mount a Railway Volume to /storage.
+RUN mkdir -p /storage
 
 EXPOSE 22 5900 8006
 
