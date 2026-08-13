@@ -19,8 +19,6 @@ ARG DEBCONF_NOWARNINGS="yes"
 ARG DEBIAN_FRONTEND="noninteractive"
 ARG DEBCONF_NONINTERACTIVE_SEEN="true"
 
-# Copy novnc installer first because Railway does not support
-# RUN --mount=type=bind
 COPY --chmod=755 ./web/conf/novnc.sh /run/novnc.sh
 
 RUN <<EOF
@@ -65,7 +63,6 @@ RUN <<EOF
     netcat-openbsd \
     ca-certificates
 
-  # Install Mesa Intel package on amd64
   if [ "$TARGETARCH" = "amd64" ]; then
     wget \
       "https://github.com/qemus/mesa-intel/releases/download/v${VERSION_MESA}/mesa-intel_${VERSION_MESA}_amd64.deb" \
@@ -76,7 +73,6 @@ RUN <<EOF
     apt-get --no-install-recommends -y install /tmp/mesa-intel.deb
   fi
 
-  # Install QEMU 11 and OVMF UEFI firmware from Debian Sid snapshot
   echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ sid main" \
     > /etc/apt/sources.list.d/qemu-snapshot.list
 
@@ -93,14 +89,12 @@ RUN <<EOF
       "qemu-system-modules-opengl=${VERSION_QEMU}"
   fi
 
-  # Install QMP
   pip3 install \
     --no-cache-dir \
     --break-system-packages \
     --root-user-action=ignore \
     "qemu.qmp==${VERSION_QMP}"
 
-  # Install Passt
   wget \
     "https://github.com/qemus/passt/releases/download/v${VERSION_PASST}/passt_${VERSION_PASST}_${TARGETARCH}.deb" \
     -O /tmp/passt.deb \
@@ -109,7 +103,6 @@ RUN <<EOF
 
   dpkg -i /tmp/passt.deb
 
-  # Install websocketd
   wget \
     "https://github.com/qemus/websocketd/releases/download/v${VERSION_WSD}/websocketd-${VERSION_WSD}_${TARGETARCH}.deb" \
     -O /tmp/wsd.deb \
@@ -118,25 +111,20 @@ RUN <<EOF
 
   dpkg -i /tmp/wsd.deb
 
-  # Remove snapshot repository
   rm -f /etc/apt/sources.list.d/qemu-snapshot.list
 
   apt-get clean
 
-  # Install noVNC
   sh /run/novnc.sh "$VERSION_VNC"
 
-  # Set version
   echo "$VERSION_ARG" > /etc/version
 
-  # Cleanup
   rm -rf \
     /var/lib/apt/lists/* \
     /tmp/* \
     /var/tmp/*
 EOF
 
-# Application files
 COPY --chmod=755 ./src /run/
 
 COPY --chmod=755 --exclude=conf/novnc.sh ./web /var/www/
@@ -153,11 +141,6 @@ COPY --chmod=744 \
   ./web/conf/nginx.conf \
   /etc/nginx/default.conf
 
-COPY --chmod=644 \
-  ./web/img/favicon.svg \
-  /usr/share/novnc/app/images/favicon.svg
-
-# Download boot logo instead of using ADD with a remote URL
 RUN wget \
     "https://github.com/qemus/boot-logo/releases/download/v${VERSION_UTK}/boot-logo_${TARGETARCH}.bin" \
     -O /run/boot-logo \
